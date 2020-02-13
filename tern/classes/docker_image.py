@@ -17,6 +17,9 @@ from tern.classes.image_layer import ImageLayer
 from tern.classes.image import Image
 
 
+
+
+# DO NOT MERGE THIS CHANGE
 class DockerImage(Image):
     '''A representation of an image created by Docker
     See image.py for super class's attributes
