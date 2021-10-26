@@ -29,9 +29,9 @@ class ImageLayer:
         Based on how container image layers are created, this is usually the
         last layer of the image that was imported
         import_str: The string from a build tool (like a Dockerfile) that
+        created this layer by importing it from another image
         layer_index: The index position of the layer in relationship to the
         other layers in the image. The base OS would be layer 1.
-        created this layer by importing it from another image
         files_analyzed: whether the files in this layer are analyzed or not
         analyzed_output: the result of the file analysis
         files: a list of files included in the image layer

@@ -8,6 +8,8 @@ OpossumUI Generator document
 import json
 import logging
 
+from typing import Any, Dict, List
+
 from tern.formats.spdx import spdx_common
 from tern.utils.general import get_git_rev_or_version
 from tern.utils import constants
@@ -19,16 +21,36 @@ from tern.report import content
 logger = logging.getLogger(constants.logger_name)
 
 
-def get_resources(image_obj):
-    '''Packages in each layer will be mapped to:
-        /Layer_00x/Packages/pkg_source/pkg_name'''
-    resources = {}
-    for layer in image_obj.layers:
-        resources["Layer_{}".format('%03d' % layer.layer_index)] = \
-            {"Packages": {pkg.source: {
-                p.name: 1 for p in layer.packages if p.source == pkg.source}
-                for pkg in layer.packages}}
-    return resources
+def _calculate_file_tree_from_paths(resources: List[str]) -> Dict[str, Any]:
+    filetree: Dict[str, Any] = {}
+
+    for resource in resources:
+        if resource != "/":
+            path_elements: List[str] = list(filter(None, resource.split("/")))
+
+            _add_resource_to_tree(
+                target_filetree=filetree,
+                path_elements=path_elements,
+                is_file=resource[-1] == "/"
+            )
+    return filetree
+
+
+def _add_resource_to_tree(
+    target_filetree: Dict[
+        str, Any
+    ],
+    path_elements: List[str],
+    is_file: bool,
+) -> None:
+    element_max_index = len(path_elements) - 1
+
+    for index, path_element in enumerate(path_elements):
+        if target_filetree.get(path_element) is None:
+            target_filetree[path_element] = (
+                1 if (index == element_max_index) and is_file else {}
+            )
+        target_filetree = target_filetree[path_element]
 
 
 def get_external_attrs(image_obj):
@@ -36,20 +58,45 @@ def get_external_attrs(image_obj):
     folder. The key is the uuid of the package and the value is a dictionary
     of metadata'''
     external_attrs = {}
-    image_uuids = {}
+    resources_to_attrs = {}
+    attr_breakpoints = set()
     for layer in image_obj.layers:
+        layer_uuid = spdx_common.get_uuid()
+
+        layer_path = f"/{'%03d' % layer.layer_index}"
+        
+        if f"{pkg_path}/" in resources_to_attrs.keys():
+            resources_to_attrs[f"{pkg_path}/"].append(layer_uuid)
+        else:
+            resources_to_attrs[f"{pkg_path}/"] = [layer_uuid]
+
+        external_attrs[layer_uuid] = {
+            "source": {
+                "name": "Tern:Layer",
+                "documentConfidence": int(70.0)
+            },
+            "comment": layer.created_by
+        }
+
         for pkg in layer.packages:
             pkg_uuid = spdx_common.get_uuid()
-            if layer.layer_index in image_uuids.keys():
-                try:
-                    # See if source exists in layer
-                    image_uuids[layer.layer_index][pkg.source].append(pkg_uuid)
-                except KeyError:
-                    # If not, add the new source to existing layer
-                    image_uuids[layer.layer_index][pkg.source] = [pkg_uuid]
+
+            pkg_path = f"{layer_path}/Packages/{pkg.source}/{pkg.name}/"
+            attr_breakpoints.add(f"{layer_path}/Packages/{pkg.source}/")
+            attr_breakpoints.add(f"{layer_path}/Packages/")
+
+            if pkg_path in resources_to_attrs.keys():
+                resources_to_attrs[pkg_path].append(pkg_uuid)
             else:
-                # add new layer and source
-                image_uuids[layer.layer_index] = {pkg.source: [pkg_uuid]}
+                resources_to_attrs[pkg_path] = [pkg_uuid]
+
+            for file_in_pkg in pkg.files:
+                absolute_file_in_pkg = f"{layer_path}/{file_in_pkg}"
+                if absolute_file_in_pkg in resources_to_attrs.keys():
+                    resources_to_attrs[absolute_file_in_pkg].append(pkg_uuid)
+                else:
+                    resources_to_attrs[absolute_file_in_pkg] = [pkg_uuid]
+
             pkg_comment = ''
             if pkg.origins.origins:
                 for notice_origin in pkg.origins.origins:
@@ -60,7 +107,7 @@ def get_external_attrs(image_obj):
                 ''.join(pkg.pkg_licenses)
             external_attrs[pkg_uuid] = {
                 "source": {
-                    "name": pkg.source,
+                    "name": f"Tern:{pkg.source}",
                     "documentConfidence": int(70.0)
                 },
                 "comment": pkg_comment,
@@ -70,31 +117,7 @@ def get_external_attrs(image_obj):
                 "licenseName": pkg_license if pkg_license else "NONE",
                 "copyright": pkg.copyright if pkg.copyright else "NONE"
             }
-    return external_attrs, image_uuids
-
-
-def get_resource_attrs(uuids):
-    '''Return the dictionary that maps a [package] path in the resource tree
-    to a list of externalAttribution uuid string(s):
-        {"/path/to/resource/": [<list of resource uuids>]}'''
-    resource_attrs = {}
-    for layer, layer_uuids in uuids.items():
-        for source, pkg_uuids in layer_uuids.items():
-            resource_attrs["/Layer_{}/Packages/{}/".format(
-                '%03d' % layer, source)] = pkg_uuids
-    return resource_attrs
-
-
-def get_attr_breakpoints(image_obj):
-    '''We list pacakges in each layer under the Layer_00x/Packages/source
-    directory but that is not the literal path. Hence, we add
-    Layer_00x/Packages/ for each layer as an attribution breakpoint.
-    '''
-    attr_breakpoints = []
-    for layer in image_obj.layers:
-        attr_breakpoints.append("/Layer_{}/Packages/".format(
-            '%03d' % layer.layer_index))
-    return attr_breakpoints
+    return external_attrs, resources_to_attrs, attr_breakpoints
 
 
 def get_document_dict(image_obj):
@@ -113,10 +136,8 @@ def get_document_dict(image_obj):
         }
     }
 
-    docu_dict["resources"] = get_resources(image_obj)
-    docu_dict["externalAttributions"], uuids = get_external_attrs(image_obj)
-    docu_dict["resourcesToAttributions"] = get_resource_attrs(uuids)
-    docu_dict["attributionBreakpoints"] = get_attr_breakpoints(image_obj)
+    docu_dict["externalAttributions"], docu_dict["resourcesToAttributions"], docu_dict["attributionBreakpoints"] = get_external_attrs(image_obj)
+    docu_dict["resources"] = _calculate_file_tree_from_paths(list(docu_dict["resourcesToAttributions"].keys()).append(docu_dict["attributionBreakpoints"]))
     return docu_dict
 
 
