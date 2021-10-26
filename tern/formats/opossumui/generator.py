@@ -75,7 +75,7 @@ def get_external_attrs(image_obj):
                 "name": "Tern:Layer",
                 "documentConfidence": int(70.0)
             },
-            "comment": str(layer) # TODO: should be the command that generated the layer
+            "comment": layer.created_by
         }
 
         for pkg in layer.packages:
