@@ -48,21 +48,9 @@ def _add_resource_to_tree(
     for index, path_element in enumerate(path_elements):
         if target_filetree.get(path_element) is None:
             target_filetree[path_element] = (
-                1
-                if _is_path_element_file_name(
-                    index=index,
-                    element_max_index=element_max_index,
-                    is_file=is_file,
-                )
-                else {}
+                1 if (index == element_max_index) and is_file else {}
             )
         target_filetree = target_filetree[path_element]
-
-
-def _is_path_element_file_name(
-    index: int, element_max_index: int, is_file: bool
-) -> bool:
-    return (index == element_max_index) and is_file
 
 
 def get_external_attrs(image_obj):
