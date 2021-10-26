@@ -31,7 +31,7 @@ def _calculate_file_tree_from_paths(resources: List[str]) -> Dict[str, Any]:
             _add_resource_to_tree(
                 target_filetree=filetree,
                 path_elements=path_elements,
-                resource_type=resource[-1] == "/"
+                is_file=resource[-1] == "/"
             )
     return filetree
 
@@ -65,37 +65,49 @@ def _is_path_element_file_name(
     return (index == element_max_index) and is_file
 
 
-def get_resources(image_obj):
-    '''Packages in each layer will be mapped to:
-        /Layer_00x/Packages/pkg_source/pkg_name'''
-    resources = {}
-    for layer in image_obj.layers:
-        resources["Layer_{}".format('%03d' % layer.layer_index)] = \
-            {"Packages": {pkg.source: {
-                p.name: 1 for p in layer.packages if p.source == pkg.source}
-                for pkg in layer.packages}}
-    return resources
-
-
 def get_external_attrs(image_obj):
     '''Create a dict which contains attribution information about a file or
     folder. The key is the uuid of the package and the value is a dictionary
     of metadata'''
     external_attrs = {}
     resources_to_attrs = {}
-    attr_breakpoints = {}
+    attr_breakpoints = set()
     for layer in image_obj.layers:
+        layer_uuid = spdx_common.get_uuid()
+
+        layer_path = f"/{'%03d' % layer.layer_index}"
+        
+        if f"{pkg_path}/" in resources_to_attrs.keys():
+            resources_to_attrs[f"{pkg_path}/"].append(layer_uuid)
+        else:
+            resources_to_attrs[f"{pkg_path}/"] = [layer_uuid]
+
+        external_attrs[layer_uuid] = {
+            "source": {
+                "name": "Tern:Layer",
+                "documentConfidence": int(70.0)
+            },
+            "comment": str(layer) # TODO: should be the command that generated the layer
+        }
+
         for pkg in layer.packages:
             pkg_uuid = spdx_common.get_uuid()
 
-            path = "/Layer_{}/Packages/{}/{}".format('%03d' % layer.layer_index, pkg.source, pkg.name)
-            attr_breakpoints.add("/Layer_{}/Packages/{}/".format('%03d' % layer.layer_index, pkg.source))
-            attr_breakpoints.add("/Layer_{}/Packages/".format('%03d' % layer.layer_index))
+            pkg_path = f"{layer_path}/Packages/{pkg.source}/{pkg.name}/"
+            attr_breakpoints.add(f"{layer_path}/Packages/{pkg.source}/")
+            attr_breakpoints.add(f"{layer_path}/Packages/")
 
-            if path in resources_to_attrs.keys():
-                resources_to_attrs[path].append(pkg_uuid)
+            if pkg_path in resources_to_attrs.keys():
+                resources_to_attrs[pkg_path].append(pkg_uuid)
             else:
-                resources_to_attrs[path] = [pkg_uuid]
+                resources_to_attrs[pkg_path] = [pkg_uuid]
+
+            for file_in_pkg in pkg.files:
+                absolute_file_in_pkg = f"{layer_path}/{file_in_pkg}"
+                if absolute_file_in_pkg in resources_to_attrs.keys():
+                    resources_to_attrs[absolute_file_in_pkg].append(pkg_uuid)
+                else:
+                    resources_to_attrs[absolute_file_in_pkg] = [pkg_uuid]
 
             pkg_comment = ''
             if pkg.origins.origins:
@@ -107,7 +119,7 @@ def get_external_attrs(image_obj):
                 ''.join(pkg.pkg_licenses)
             external_attrs[pkg_uuid] = {
                 "source": {
-                    "name": pkg.source,
+                    "name": f"Tern:{pkg.source}",
                     "documentConfidence": int(70.0)
                 },
                 "comment": pkg_comment,
@@ -117,31 +129,7 @@ def get_external_attrs(image_obj):
                 "licenseName": pkg_license if pkg_license else "NONE",
                 "copyright": pkg.copyright if pkg.copyright else "NONE"
             }
-    return external_attrs, resources_to_attrs
-
-
-def get_resource_attrs(uuids):
-    '''Return the dictionary that maps a [package] path in the resource tree
-    to a list of externalAttribution uuid string(s):
-        {"/path/to/resource/": [<list of resource uuids>]}'''
-    resource_attrs = {}
-    for layer, layer_uuids in uuids.items():
-        for source, pkg_uuids in layer_uuids.items():
-            resource_attrs["/Layer_{}/Packages/{}/".format(
-                '%03d' % layer, source)] = pkg_uuids
-    return resource_attrs
-
-
-def get_attr_breakpoints(image_obj):
-    '''We list pacakges in each layer under the Layer_00x/Packages/source
-    directory but that is not the literal path. Hence, we add
-    Layer_00x/Packages/ for each layer as an attribution breakpoint.
-    '''
-    attr_breakpoints = []
-    for layer in image_obj.layers:
-        attr_breakpoints.append("/Layer_{}/Packages/".format(
-            '%03d' % layer.layer_index))
-    return attr_breakpoints
+    return external_attrs, resources_to_attrs, attr_breakpoints
 
 
 def get_document_dict(image_obj):
@@ -160,8 +148,7 @@ def get_document_dict(image_obj):
         }
     }
 
-    docu_dict["externalAttributions"], docu_dict["resourcesToAttributions"] = get_external_attrs(image_obj)
-    docu_dict["attributionBreakpoints"] = get_attr_breakpoints(image_obj)
+    docu_dict["externalAttributions"], docu_dict["resourcesToAttributions"], docu_dict["attributionBreakpoints"] = get_external_attrs(image_obj)
     docu_dict["resources"] = _calculate_file_tree_from_paths(list(docu_dict["resourcesToAttributions"].keys()).append(docu_dict["attributionBreakpoints"]))
     return docu_dict
 
